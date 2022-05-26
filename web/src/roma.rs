@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use once_cell::sync::Lazy;
+use smallvec::SmallVec;
 
 #[derive(Debug, Default)]
 pub struct IME {
@@ -20,6 +21,34 @@ impl IME {
         self.buffer.pop()
     }
 
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+    }
+
+    pub fn candidates(&self) -> SmallVec<[&[char]; 10]> {
+        let remains = self
+            .buffer
+            .iter()
+            .copied()
+            .skip_while(|x| !x.is_ascii())
+            .collect::<SmallVec<[char; 3]>>();
+
+        let mut ret = SmallVec::new();
+
+        for (&roma, &hira) in ROMA_TABLE.iter() {
+            let is_candidate = roma.iter().zip(remains.iter()).all(|(a, b)| a == b);
+            if is_candidate {
+                ret.push(hira);
+            }
+        }
+
+        if matches!(remains.as_slice(), &[a] if !"aiueon".contains(a)) {
+            ret.push(['っ'].as_slice());
+        }
+
+        ret
+    }
+
     pub fn put(&mut self, c: char) {
         assert!(c.is_ascii());
 
@@ -27,9 +56,8 @@ impl IME {
 
         self.buffer.push(c);
 
-        // ttya -> っちゃ
-        if matches!(self.buffer.as_slice(), &[.., a, b] if a == b && !"aiueon".contains(a))
-        {
+        // tt -> っt
+        if matches!(self.buffer.as_slice(), &[.., a, b] if a == b && !"aiueon".contains(a)) {
             self.buffer.pop();
             let a = self.buffer.pop().unwrap();
             self.buffer.push('っ');
@@ -50,8 +78,8 @@ impl IME {
             }
         }
 
-        // taiinreki -> たいいんれき
-        if let [.., 'n', _] = self.buffer.as_slice() {
+        // nr -> んr
+        if matches!(self.buffer.as_slice(), &[.., 'n', a] if a != 'y') {
             let i = self.buffer.len() - 2;
             self.buffer[i] = 'ん';
         }
