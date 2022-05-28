@@ -1,16 +1,30 @@
 pub mod roma;
 
-use macros::ident_as_char_array;
+use macros::segments;
 
 use roma::IME;
-use yew::events::KeyboardEvent;
+use yew::{events::KeyboardEvent, html, Component, Context, Html};
 
-use yew::{html, Component, Context, Html};
+#[rustfmt::skip]
+const SENTENCES: &[&[Segment]] = &[
+    &segments![
+        日本国民       / "は、" / 正当     / に / 選挙     / された / 国会     / における / 代表者         / を / 通   / じて / 行動     / "し、",
+        にほんこくみん / "は、" / せいとう / に / せんきょ / された / こっかい / における / だいひょうしゃ / を / つう / じて / こうどう / "し、",
+    ],
+    &segments![
+        われらとわれらの / 子孫   / "のために、" / 諸国民       / との / 協和     / による / 成果   / "と、",
+        われらとわれらの / しそん / "のために、" / しょこくみん / との / きょうわ / による / せいか / "と、",
+    ],
+    &segments![
+        わが / 国   / 全土   / にわたつて / 自由   / のもたらす / 恵沢     / を / 確保   / "し、",
+        わが / くに / ぜんど / にわたつて / じゆう / のもたらす / けいたく / を / かくほ / "し、",
+    ],
+];
 
-pub struct App {
+pub struct App<'a, S: 'a> {
     ime: IME,
-    segments: &'static [Segment<'static>],
-    current_segment_index: usize,
+    sentences: S,
+    sentence: Sentence<'a>
 }
 
 pub struct Segment<'a> {
@@ -18,10 +32,43 @@ pub struct Segment<'a> {
     hira: &'a [char],
 }
 
-macro_rules! segments {
-    ($($origin: ident)/+, $($hira: ident)/+) => {
-        [$(Segment::new(ident_as_char_array!($origin).as_slice(), ident_as_char_array!($hira).as_slice()),)+]
-    };
+pub struct Sentence<'a> {
+    segments: &'a [Segment<'a>],
+    index: usize,
+}
+
+impl<'a> Sentence<'a> {
+    fn new(segments: &'a [Segment<'a>]) -> Self {
+        Self {
+            segments,
+            index: 0,
+        }
+    }
+
+    fn segments(&self) -> &'a [Segment<'a>] {
+        self.segments
+    }
+
+    fn advance_segment(&mut self) -> bool {
+        if self.index + 1 == self.segments.len() {
+            false
+        } else {
+            self.index += 1;
+            true
+        }
+    }
+
+    fn current_segment(&self) -> &Segment<'_> {
+        &self.segments[self.index]
+    }
+
+    fn typed_segments(&self) -> &[Segment<'_>] {
+        &self.segments[..self.index]
+    }
+
+    fn untyped_segments(&self) -> &[Segment<'_>] {
+        &self.segments.get(self.index+1..).unwrap_or(&[])
+    }
 }
 
 impl<'a> Segment<'a> {
@@ -54,26 +101,15 @@ impl SegmentTypingStatus {
     }
 }
 
-impl App {
-    fn current_segment(&self) -> &Segment<'_> {
-        &self.segments[self.current_segment_index]
-    }
-
-    fn typed_segments(&self) -> &[Segment<'_>] {
-        &self.segments[..self.current_segment_index]
-    }
-
-    fn untyped_segments(&self) -> &[Segment<'_>] {
-        let len = self.segments.len();
-        let index = (self.current_segment_index + 1).min(len);
-        &self.segments[index..]
-    }
-
+impl<'a, S> App<'a, S>
+where
+    S: 'a + Iterator<Item = Sentence<'a>>
+{
     fn typing_status(&self) -> Vec<SegmentTypingStatus> {
         let mut ret = vec![];
 
         let ime_buf = self.ime.buffer();
-        let segment = self.current_segment();
+        let segment = self.sentence.current_segment();
 
         for (i, &c) in ime_buf.iter().enumerate() {
             if c.is_ascii() {
@@ -93,7 +129,7 @@ impl App {
         let hira_len_in_ime_buf = ime_buf.iter().take_while(|x| !x.is_ascii()).count();
 
         let typing_correctly = matches!(segment.hira.get(hira_len_in_ime_buf), Some(&s) if ime_candidates.contains(&[s].as_slice()))
-            || matches!(segment.hira.get(hira_len_in_ime_buf..hira_len_in_ime_buf+1), Some(s) if ime_candidates.contains(&s));
+            || matches!(segment.hira.get(hira_len_in_ime_buf..=hira_len_in_ime_buf+1), Some(s) if ime_candidates.contains(&s));
 
         for &ime_buf in &ime_buf[hira_len_in_ime_buf..] {
             ret.push(SegmentTypingStatus::new(ime_buf, typing_correctly));
@@ -103,27 +139,24 @@ impl App {
     }
 }
 
-const SENTENCE: &[Segment] = &segments![
-    これは / タイピング / ゲーム / の / 試作品 / です,
-    これは / たいぴんぐ / げーむ / の / しさくひん / です
-];
+type DefaultApp = App<'static, Box<dyn Iterator<Item = Sentence<'static>>>>;
 
-impl Component for App {
+impl Component for DefaultApp {
     type Message = AppMessage;
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
+        let mut iter = SENTENCES.iter().map(|x| Sentence::new(x));
+        let sentence = iter.next().unwrap();
         Self {
             ime: IME::new(),
-            segments: SENTENCE,
-            current_segment_index: 0,
+            sentences: Box::new(iter),
+            sentence,
         }
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
         use AppMessage::*;
-
-        log::info!("root update: {:?}", msg);
 
         match msg {
             Type(b) if b == "Backspace" => {
@@ -136,9 +169,14 @@ impl Component for App {
                     self.ime.put(c);
                 }
 
-                if self.ime.buffer() == self.current_segment().hira {
-                    self.current_segment_index += 1;
-                    self.ime.clear();
+                let segment = self.sentence.current_segment();
+                if self.ime.buffer().get(0..segment.hira.len()) == Some(segment.hira) {
+                    let len = segment.hira.len();
+                    self.ime.trim_beginning(len);
+
+                    if !self.sentence.advance_segment() {
+                        self.sentence = self.sentences.next().unwrap();
+                    }
                 }
             }
         };
@@ -148,6 +186,7 @@ impl Component for App {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let typed = self
+            .sentence
             .typed_segments()
             .iter()
             .flat_map(|x| x.origin)
@@ -164,7 +203,8 @@ impl Component for App {
             .collect::<Html>();
 
         let untyped = self
-            .segments
+            .sentence
+            .segments()
             .iter()
             .flat_map(|x| x.origin)
             .skip(typed.chars().count())
@@ -172,6 +212,11 @@ impl Component for App {
 
         html! {
             <>
+                <input
+                    placeholder="type here"
+                    value=""
+                    onkeydown={ctx.link().callback(|e: KeyboardEvent| AppMessage::Type(e.key()))}
+                />
                 <p>
                     <span style={"color:green"}>{&typed}</span>
                     <span style={"color:gray"}>{untyped}</span>
@@ -180,11 +225,6 @@ impl Component for App {
                     <span style={"color:green"}>{&typed}</span>
                     {typing}
                 </p>
-                <input
-                    placeholder="type here"
-                    value=""
-                    onkeydown={ctx.link().callback(|e: KeyboardEvent| AppMessage::Type(e.key()) )}
-                />
             </>
         }
     }
@@ -192,5 +232,5 @@ impl Component for App {
 
 fn main() {
     wasm_logger::init(wasm_logger::Config::default());
-    yew::Renderer::<App>::new().render();
+    yew::Renderer::<DefaultApp>::new().render();
 }

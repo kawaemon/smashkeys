@@ -1,23 +1,86 @@
-use proc_macro::TokenStream;
-use syn::{parse_macro_input, Ident, LitStr};
+use proc_macro2::{Span, TokenStream};
+use quote::quote;
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input, Ident, LitChar, LitStr, Result, Token,
+};
 
-fn str_to_char_array(s: &str) -> String {
-    let mut result = "[".to_string();
-    for c in s.chars() {
-        result += &format!("'{c}',");
+fn ident_or_litstr(stream: ParseStream) -> Result<(String, Span)> {
+    let lookahead = stream.lookahead1();
+
+    if lookahead.peek(Ident) {
+        let ident: Ident = stream.parse()?;
+        Ok((ident.to_string(), ident.span()))
+    } else if lookahead.peek(LitStr) {
+        let lit: LitStr = stream.parse()?;
+        Ok((lit.value(), lit.span()))
+    } else {
+        Err(lookahead.error())
     }
-    result += "]";
-    result
+}
+
+fn str_to_char_array(text: &str, span: Span) -> TokenStream {
+    let text = text.chars().map(|c| LitChar::new(c, span));
+    quote! { [ #(#text),* ] }
 }
 
 #[proc_macro]
-pub fn as_char_array(input: TokenStream) -> TokenStream {
-    let lit = parse_macro_input!(input as LitStr);
-    str_to_char_array(&lit.value()).parse().unwrap()
+pub fn as_char_array(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let (text, span) = parse_macro_input!(input with ident_or_litstr);
+    str_to_char_array(&text, span).into()
 }
 
 #[proc_macro]
-pub fn ident_as_char_array(input: TokenStream) -> TokenStream {
-    let ident = parse_macro_input!(input as Ident);
-    str_to_char_array(&ident.to_string()).parse().unwrap()
+pub fn segments(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    struct Input {
+        origin: Vec<(String, Span)>,
+        hira: Vec<(String, Span)>,
+    }
+
+    impl Parse for Input {
+        fn parse(input: ParseStream) -> Result<Self> {
+            let parse = || -> Result<_> {
+                let mut ret = vec![];
+                let mut first = true;
+                loop {
+                    if input.peek(Token![,]) {
+                        let _: Token![,] = input.parse()?;
+                        break;
+                    }
+                    if input.is_empty() {
+                        break;
+                    }
+                    if first {
+                        first = false
+                    } else {
+                        let _: Token![/] = input.parse()?;
+                    }
+                    ret.push(ident_or_litstr(input)?);
+                }
+                Ok(ret)
+            };
+
+            Ok(Self {
+                origin: parse()?,
+                hira: parse()?,
+            })
+        }
+    }
+
+    impl Input {
+        fn expand(self) -> TokenStream {
+            let segments = self
+                .origin
+                .into_iter()
+                .map(|(t, s)| str_to_char_array(&t, s))
+                .zip(self.hira.into_iter().map(|(t, s)| str_to_char_array(&t, s)))
+                .map(
+                    |(origin, hira)| quote! { Segment::new(#origin.as_slice(), #hira.as_slice()) },
+                );
+
+            quote! { [ #(#segments),* ] }
+        }
+    }
+
+    parse_macro_input!(input as Input).expand().into()
 }
