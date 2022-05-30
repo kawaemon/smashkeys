@@ -24,12 +24,7 @@ const SENTENCES: &[&[Segment]] = &[
 pub struct App<'a, S: 'a> {
     ime: IME,
     sentences: S,
-    sentence: Sentence<'a>
-}
-
-pub struct Segment<'a> {
-    origin: &'a [char],
-    hira: &'a [char],
+    sentence: Sentence<'a>,
 }
 
 pub struct Sentence<'a> {
@@ -37,12 +32,14 @@ pub struct Sentence<'a> {
     index: usize,
 }
 
+pub struct Segment<'a> {
+    origin: &'a [char],
+    hira: &'a [char],
+}
+
 impl<'a> Sentence<'a> {
     fn new(segments: &'a [Segment<'a>]) -> Self {
-        Self {
-            segments,
-            index: 0,
-        }
+        Self { segments, index: 0 }
     }
 
     fn segments(&self) -> &'a [Segment<'a>] {
@@ -58,16 +55,16 @@ impl<'a> Sentence<'a> {
         }
     }
 
-    fn current_segment(&self) -> &Segment<'_> {
+    fn current_segment(&self) -> &'a Segment<'a> {
         &self.segments[self.index]
     }
 
-    fn typed_segments(&self) -> &[Segment<'_>] {
+    fn typed_segments(&self) -> &'a [Segment<'a>] {
         &self.segments[..self.index]
     }
 
-    fn untyped_segments(&self) -> &[Segment<'_>] {
-        &self.segments.get(self.index+1..).unwrap_or(&[])
+    fn untyped_segments(&self) -> &'a [Segment<'a>] {
+        &self.segments.get(self.index + 1..).unwrap_or(&[])
     }
 }
 
@@ -103,7 +100,7 @@ impl SegmentTypingStatus {
 
 impl<'a, S> App<'a, S>
 where
-    S: 'a + Iterator<Item = Sentence<'a>>
+    S: 'a + Iterator<Item = Sentence<'a>>,
 {
     fn typing_status(&self) -> Vec<SegmentTypingStatus> {
         let mut ret = vec![];
@@ -197,7 +194,7 @@ impl Component for DefaultApp {
             .iter()
             .map(|x| {
                 let color = if x.ok { "green" } else { "red" };
-                let style = format!("color:{color}; text-decoration: underline {color};");
+                let style = format!("color: {color}; text-decoration: underline {color};");
                 html!(<span {style}>{x.c}</span>)
             })
             .collect::<Html>();
@@ -225,6 +222,7 @@ impl Component for DefaultApp {
                     <span style={"color:green"}>{&typed}</span>
                     {typing}
                 </p>
+                <p> {self.ime.input_history().collect::<String>()} </p>
             </>
         }
     }

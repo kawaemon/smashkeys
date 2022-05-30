@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
@@ -8,27 +8,48 @@ use macros::as_char_array;
 #[derive(Debug, Default)]
 pub struct IME {
     buffer: Vec<char>,
+    input_history: Vec<(char, usize)>, // input char, buffer.len()
 }
 
 impl IME {
     pub fn new() -> Self {
-        Self { buffer: Vec::new() }
+        Self {
+            buffer: vec![],
+            input_history: vec![],
+        }
     }
 
     pub fn buffer(&self) -> &[char] {
         &self.buffer
     }
 
-    pub fn pop(&mut self) -> Option<char> {
-        self.buffer.pop()
+    pub fn input_history(&self) -> impl Iterator<Item = char> + '_ {
+        self.input_history.iter().map(|&(c, _)| c)
     }
 
-    pub fn clear(&mut self) {
-        self.buffer.clear();
+    pub fn pop(&mut self) -> Option<char> {
+        let pop_count = self
+            .input_history
+            .iter()
+            .filter(|&&(_, i)| i == self.buffer.len())
+            .count();
+
+        for _ in 0..pop_count {
+            self.input_history.pop();
+        }
+
+        self.buffer.pop()
     }
 
     pub fn trim_beginning(&mut self, n: usize) {
         self.buffer.drain(0..n);
+
+        let drain_until = self.input_history.iter().filter(|&&(_, i)| i <= n).count();
+        self.input_history.drain(..drain_until);
+    }
+
+    pub fn clear(&mut self) {
+        self.buffer.clear();
     }
 
     pub fn candidates(&self) -> SmallVec<[&[char]; 10]> {
@@ -55,42 +76,83 @@ impl IME {
         ret
     }
 
-    pub fn put(&mut self, c: char) {
-        assert!(c.is_ascii());
+    fn record_input_history(&mut self, input: char) {
+        self.input_history.push((input, self.buffer.len()));
+    }
 
-        let c = c.to_ascii_lowercase();
-
-        self.buffer.push(c);
-
-        // tt -> っt
-        if matches!(self.buffer.as_slice(), &[.., a, b] if a == b && !"aiueon".contains(a)) {
-            self.buffer.pop();
-            let a = self.buffer.pop().unwrap();
-            self.buffer.push('っ');
-            self.buffer.push(a);
+    pub fn put(&mut self, input: char) {
+        struct RecordInputHistoryGuard<'a, 'b> {
+            ime: &'a RefCell<&'b mut IME>,
+            input: char,
+        }
+        impl Drop for RecordInputHistoryGuard<'_, '_> {
+            fn drop(&mut self) {
+                let mut ime = self.ime.borrow_mut();
+                ime.record_input_history(self.input);
+                log::info!("{:#?}", ime);
+            }
         }
 
+        assert!(input.is_ascii());
+
+        let input = input.to_ascii_lowercase();
+
+        let me = RefCell::new(self);
+        let _guard = RecordInputHistoryGuard { ime: &me, input };
+
+        let mut me = me.borrow_mut();
+
+        me.buffer.push(input);
+
         // 通常の変換, a -> あ, tya -> ちゃ
-        let len = self.buffer.len();
+        let len = me.buffer.len();
         for i in (1..=3.min(len)).rev() {
-            if let Some(hira) = ROMA_TABLE.get(&self.buffer[len - i..]) {
+            if let Some(hira) = ROMA_TABLE.get(&me.buffer[len - i..]) {
                 for _ in 0..i {
-                    self.buffer.pop();
+                    me.buffer.pop();
                 }
                 for c in *hira {
-                    self.buffer.push(*c);
+                    me.buffer.push(*c);
                 }
                 return;
             }
         }
 
+        if_bind! {
+            // tt -> っt
+            if match me.buffer.as_slice(); &[.., a, b] if a == b && !"aiueon".contains(a) => {
+                me.buffer.pop();
+                me.buffer.pop();
+
+                me.buffer.push('っ');
+                me.buffer.push(a);
+
+                return;
+            }
+        }
+
         // nr -> んr
-        if matches!(self.buffer.as_slice(), &[.., 'n', a] if a != 'y') {
-            let i = self.buffer.len() - 2;
-            self.buffer[i] = 'ん';
+        if matches!(me.buffer.as_slice(), &[.., 'n', a] if a != 'y') {
+            let i = me.buffer.len() - 2;
+            me.buffer[i] = 'ん';
+
+            me.record_input_history(input);
         }
     }
 }
+
+macro_rules! if_bind {
+    ($(if match $expr:expr; $(|)? $( $pat:pat_param )|+ $( if $guard: expr )? => $block:block )*) => {
+        $(
+            match $expr {
+                $( $pat )|+ $( if $guard )? => $block,
+                _ => {}
+            }
+        )*
+    }
+}
+
+use if_bind;
 
 macro_rules! roma_pairs {
     ($(($roma: literal, $hira: literal)),*$(,)?) => {
@@ -99,7 +161,7 @@ macro_rules! roma_pairs {
 }
 
 static ROMA_TABLE: Lazy<HashMap<&[char], &[char]>> = Lazy::new(|| {
-    roma_pairs! [
+    roma_pairs![
         (",", "、"),
         (".", "。"),
         ("a", "あ"),
@@ -187,6 +249,14 @@ static ROMA_TABLE: Lazy<HashMap<&[char], &[char]>> = Lazy::new(|| {
         ("le", "ぇ"),
         ("xo", "ぉ"),
         ("lo", "ぉ"),
+        ("xya", "ゃ"),
+        ("lya", "ゃ"),
+        ("xyu", "ゅ"),
+        ("lyu", "ゅ"),
+        ("xyo", "ょ"),
+        ("lyo", "ょ"),
+        ("ltu", "っ"),
+        ("xtu", "っ"),
         ("kya", "きゃ"),
         ("kyi", "きぃ"),
         ("kyu", "きゅ"),
