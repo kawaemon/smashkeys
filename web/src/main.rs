@@ -1,8 +1,12 @@
-pub mod roma;
+// false-positive on `use $macro`: we need it to use macro above its definition
+#![allow(clippy::single_component_path_imports)]
+#![allow(dead_code)]
+
+mod ext;
+mod roma;
 
 use macros::segments;
-
-use roma::IME;
+use roma::Ime;
 use yew::{events::KeyboardEvent, html, Component, Context, Html};
 
 #[rustfmt::skip]
@@ -22,7 +26,7 @@ const SENTENCES: &[&[Segment]] = &[
 ];
 
 pub struct App<'a, S: 'a> {
-    ime: IME,
+    ime: Ime,
     sentences: S,
     sentence: Sentence<'a>,
 }
@@ -64,7 +68,7 @@ impl<'a> Sentence<'a> {
     }
 
     fn untyped_segments(&self) -> &'a [Segment<'a>] {
-        &self.segments.get(self.index + 1..).unwrap_or(&[])
+        self.segments.get(self.index + 1..).unwrap_or(&[])
     }
 }
 
@@ -146,7 +150,7 @@ impl Component for DefaultApp {
         let mut iter = SENTENCES.iter().map(|x| Sentence::new(x));
         let sentence = iter.next().unwrap();
         Self {
-            ime: IME::new(),
+            ime: Ime::new(),
             sentences: Box::new(iter),
             sentence,
         }

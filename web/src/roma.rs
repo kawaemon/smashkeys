@@ -1,17 +1,22 @@
 use std::{cell::RefCell, collections::HashMap};
 
+use macros::as_char_array;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
 
-use macros::as_char_array;
+use crate::ext::IteratorAllEqExt as _;
 
 #[derive(Debug, Default)]
-pub struct IME {
+pub struct Ime {
+    // On perspective of we frequently pop front, `VecDeque` is suitable here, but we need contiguous
+    // memory space (&[char]) to lookup on HashMap (ROMA_TABLE). We could use `VecDeque::make_contiguous`
+    // function, but we need to call it every time we lookup ROMA_TABLE.
+    // Probably it pays more cost than faster `pop_front` we get by using `VecDeque`.
     buffer: Vec<char>,
     input_history: Vec<(char, usize)>, // input char, buffer.len()
 }
 
-impl IME {
+impl Ime {
     pub fn new() -> Self {
         Self {
             buffer: vec![],
@@ -63,8 +68,7 @@ impl IME {
         let mut ret = SmallVec::new();
 
         for (&roma, &hira) in ROMA_TABLE.iter() {
-            let is_candidate = roma.iter().zip(remains.iter()).all(|(a, b)| a == b);
-            if is_candidate {
+            if roma.iter().zip(remains.iter()).all_eq() {
                 ret.push(hira);
             }
         }
@@ -82,7 +86,7 @@ impl IME {
 
     pub fn put(&mut self, input: char) {
         struct RecordInputHistoryGuard<'a, 'b> {
-            ime: &'a RefCell<&'b mut IME>,
+            ime: &'a RefCell<&'b mut Ime>,
             input: char,
         }
         impl Drop for RecordInputHistoryGuard<'_, '_> {
@@ -152,6 +156,7 @@ macro_rules! if_bind {
     }
 }
 
+// we need this to use macro above its definition
 use if_bind;
 
 macro_rules! roma_pairs {
