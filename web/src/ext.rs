@@ -1,13 +1,13 @@
-pub trait IteratorAllEqExt {
-    fn all_eq(self) -> bool;
+pub fn eq<A, B>((a, b): (A, B)) -> bool
+where
+    A: PartialEq<B>,
+{
+    a == b
 }
 
-impl<Iter, ItemA, ItemB> IteratorAllEqExt for Iter
+pub fn eq_ref<A, B>((a, b): &(A, B)) -> bool
 where
-    Iter: Iterator<Item = (ItemA, ItemB)>,
-    ItemA: PartialEq<ItemB>,
+    A: PartialEq<B>,
 {
-    fn all_eq(mut self) -> bool {
-        self.all(|(a, b)| a == b)
-    }
+    a == b
 }

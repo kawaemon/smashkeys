@@ -5,25 +5,12 @@
 mod ext;
 mod roma;
 
+use ext::eq_ref;
 use macros::segments;
 use roma::Ime;
 use yew::{events::KeyboardEvent, html, Component, Context, Html};
 
-#[rustfmt::skip]
-const SENTENCES: &[&[Segment]] = &[
-    &segments![
-        日本国民       / "は、" / 正当     / に / 選挙     / された / 国会     / における / 代表者         / を / 通   / じて / 行動     / "し、",
-        にほんこくみん / "は、" / せいとう / に / せんきょ / された / こっかい / における / だいひょうしゃ / を / つう / じて / こうどう / "し、",
-    ],
-    &segments![
-        われらとわれらの / 子孫   / "のために、" / 諸国民       / との / 協和     / による / 成果   / "と、",
-        われらとわれらの / しそん / "のために、" / しょこくみん / との / きょうわ / による / せいか / "と、",
-    ],
-    &segments![
-        わが / 国   / 全土   / にわたつて / 自由   / のもたらす / 恵沢     / を / 確保   / "し、",
-        わが / くに / ぜんど / にわたつて / じゆう / のもたらす / けいたく / を / かくほ / "し、",
-    ],
-];
+include!("../.kprivate/lyric.rs");
 
 pub struct App<'a, S: 'a> {
     ime: Ime,
@@ -211,6 +198,48 @@ impl Component for DefaultApp {
             .skip(typed.chars().count())
             .collect::<String>();
 
+        let correctly_typing_hira = self
+            .ime
+            .buffer()
+            .iter()
+            .zip(self.sentence.current_segment().hira.iter())
+            .take_while(eq_ref)
+            .map(|(&a, _)| a)
+            .collect::<Vec<char>>();
+
+        let typed_hira_segments = self
+            .sentence
+            .typed_segments()
+            .iter()
+            .flat_map(|x| x.hira)
+            .copied()
+            .collect::<String>();
+
+        let typed_hira = self
+            .sentence
+            .typed_segments()
+            .iter()
+            .flat_map(|x| x.hira)
+            .copied()
+            .chain(correctly_typing_hira.iter().copied())
+            .collect::<String>();
+
+        let untyped_hira = self
+            .sentence
+            .current_segment()
+            .hira
+            .iter()
+            .copied()
+            .skip(correctly_typing_hira.len())
+            .chain(
+                self.sentence
+                    .untyped_segments()
+                    .iter()
+                    .flat_map(|x| x.hira)
+                    .copied(),
+            )
+            .collect::<Vec<char>>();
+
         html! {
             <>
                 <input
@@ -219,14 +248,21 @@ impl Component for DefaultApp {
                     onkeydown={ctx.link().callback(|e: KeyboardEvent| AppMessage::Type(e.key()))}
                 />
                 <p>
-                    <span style={"color:green"}>{&typed}</span>
-                    <span style={"color:gray"}>{untyped}</span>
+                    <span style={"color:green"}>{typed_hira}</span>
+                    <span style={"color:gray"}>{untyped_hira}</span>
+                    <br /> // forvive me
+                    <span style={"color:green"}>{typed_hira_segments}</span>
+                    {typing.clone()}
                 </p>
                 <p>
                     <span style={"color:green"}>{&typed}</span>
+                    <span style={"color:gray"}>{untyped}</span>
+                    <br /> // forgive me
+                    <span style={"color:green"}>{&typed}</span>
                     {typing}
                 </p>
-                <p> {self.ime.input_history().collect::<String>()} </p>
+                // <p> {self.ime.input_history().collect::<String>()} </p>
+                <video src="video.webm" width=240 controls={true} />
             </>
         }
     }

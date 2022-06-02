@@ -4,7 +4,7 @@ use macros::as_char_array;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
 
-use crate::ext::IteratorAllEqExt as _;
+use crate::ext::eq;
 
 #[derive(Debug, Default)]
 pub struct Ime {
@@ -68,7 +68,7 @@ impl Ime {
         let mut ret = SmallVec::new();
 
         for (&roma, &hira) in ROMA_TABLE.iter() {
-            if roma.iter().zip(remains.iter()).all_eq() {
+            if roma.iter().zip(remains.iter()).all(eq) {
                 ret.push(hira);
             }
         }
@@ -169,6 +169,7 @@ static ROMA_TABLE: Lazy<HashMap<&[char], &[char]>> = Lazy::new(|| {
     roma_pairs![
         (",", "、"),
         (".", "。"),
+        ("-", "ー"),
         ("a", "あ"),
         ("i", "い"),
         ("u", "う"),
