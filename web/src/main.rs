@@ -1,6 +1,7 @@
 // false-positive on `use $macro`: we need it to use macro above its definition
 #![allow(clippy::single_component_path_imports)]
 #![allow(dead_code)]
+#![feature(label_break_value)]
 
 mod ext;
 mod roma;
@@ -42,6 +43,15 @@ impl<'a> Sentence<'a> {
             false
         } else {
             self.index += 1;
+            true
+        }
+    }
+
+    fn retreat_segment(&mut self) -> bool {
+        if self.index == 0 {
+            false
+        } else {
+            self.index -= 1;
             true
         }
     }
@@ -147,7 +157,18 @@ impl Component for DefaultApp {
         use AppMessage::*;
 
         match msg {
-            Type(b) if b == "Backspace" => {
+            Type(b) if b == "Backspace" => 'b: {
+                if self.ime.buffer().len() != 0 {
+                    self.ime.pop();
+                    break 'b;
+                }
+
+                if !self.sentence.retreat_segment() {
+                    break 'b;
+                }
+
+                let hira = self.sentence.current_segment().hira.to_vec();
+                self.ime.set_buffer(hira);
                 self.ime.pop();
             }
 
@@ -250,7 +271,7 @@ impl Component for DefaultApp {
                 <p>
                     <span style={"color:green"}>{typed_hira}</span>
                     <span style={"color:gray"}>{untyped_hira}</span>
-                    <br /> // forvive me
+                    <br /> // forgive me
                     <span style={"color:green"}>{typed_hira_segments}</span>
                     {typing.clone()}
                 </p>

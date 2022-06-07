@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::collections::HashMap;
 
 use macros::as_char_array;
 use once_cell::sync::Lazy;
@@ -9,48 +9,31 @@ use crate::ext::eq;
 #[derive(Debug, Default)]
 pub struct Ime {
     // On perspective of we frequently pop front, `VecDeque` is suitable here, but we need contiguous
-    // memory space (&[char]) to lookup on HashMap (ROMA_TABLE). We could use `VecDeque::make_contiguous`
-    // function, but we need to call it every time we lookup ROMA_TABLE.
+    // memory space (&[char]) to lookup on HashMap We could use `VecDeque::make_contiguous`
+    // function, but we need to call it every time we lookup HashMap.
     // Probably it pays more cost than faster `pop_front` we get by using `VecDeque`.
     buffer: Vec<char>,
-    input_history: Vec<(char, usize)>, // input char, buffer.len()
 }
 
 impl Ime {
     pub fn new() -> Self {
-        Self {
-            buffer: vec![],
-            input_history: vec![],
-        }
+        Self { buffer: vec![] }
     }
 
     pub fn buffer(&self) -> &[char] {
         &self.buffer
     }
 
-    pub fn input_history(&self) -> impl Iterator<Item = char> + '_ {
-        self.input_history.iter().map(|&(c, _)| c)
+    pub fn set_buffer(&mut self, new_buf: Vec<char>) {
+        self.buffer = new_buf;
     }
 
     pub fn pop(&mut self) -> Option<char> {
-        let pop_count = self
-            .input_history
-            .iter()
-            .filter(|&&(_, i)| i == self.buffer.len())
-            .count();
-
-        for _ in 0..pop_count {
-            self.input_history.pop();
-        }
-
         self.buffer.pop()
     }
 
     pub fn trim_beginning(&mut self, n: usize) {
         self.buffer.drain(0..n);
-
-        let drain_until = self.input_history.iter().filter(|&&(_, i)| i <= n).count();
-        self.input_history.drain(..drain_until);
     }
 
     pub fn clear(&mut self) {
@@ -67,7 +50,7 @@ impl Ime {
 
         let mut ret = SmallVec::new();
 
-        for (&roma, &hira) in ROMA_TABLE.iter() {
+        for (&roma, &hira) in ROMA_TO_HIRA_TABLE.iter() {
             if roma.iter().zip(remains.iter()).all(eq) {
                 ret.push(hira);
             }
@@ -80,43 +63,22 @@ impl Ime {
         ret
     }
 
-    fn record_input_history(&mut self, input: char) {
-        self.input_history.push((input, self.buffer.len()));
-    }
-
     pub fn put(&mut self, input: char) {
-        struct RecordInputHistoryGuard<'a, 'b> {
-            ime: &'a RefCell<&'b mut Ime>,
-            input: char,
-        }
-        impl Drop for RecordInputHistoryGuard<'_, '_> {
-            fn drop(&mut self) {
-                let mut ime = self.ime.borrow_mut();
-                ime.record_input_history(self.input);
-                log::info!("{:#?}", ime);
-            }
-        }
-
         assert!(input.is_ascii());
 
         let input = input.to_ascii_lowercase();
 
-        let me = RefCell::new(self);
-        let _guard = RecordInputHistoryGuard { ime: &me, input };
-
-        let mut me = me.borrow_mut();
-
-        me.buffer.push(input);
+        self.buffer.push(input);
 
         // 通常の変換, a -> あ, tya -> ちゃ
-        let len = me.buffer.len();
+        let len = self.buffer.len();
         for i in (1..=3.min(len)).rev() {
-            if let Some(hira) = ROMA_TABLE.get(&me.buffer[len - i..]) {
+            if let Some(hira) = ROMA_TO_HIRA_TABLE.get(&self.buffer[len - i..]) {
                 for _ in 0..i {
-                    me.buffer.pop();
+                    self.buffer.pop();
                 }
                 for c in *hira {
-                    me.buffer.push(*c);
+                    self.buffer.push(*c);
                 }
                 return;
             }
@@ -124,23 +86,21 @@ impl Ime {
 
         if_bind! {
             // tt -> っt
-            if match me.buffer.as_slice(); &[.., a, b] if a == b && !"aiueon".contains(a) => {
-                me.buffer.pop();
-                me.buffer.pop();
+            if match self.buffer.as_slice(); &[.., a, b] if a == b && !"aiueon".contains(a) => {
+                self.buffer.pop();
+                self.buffer.pop();
 
-                me.buffer.push('っ');
-                me.buffer.push(a);
+                self.buffer.push('っ');
+                self.buffer.push(a);
 
                 return;
             }
         }
 
         // nr -> んr
-        if matches!(me.buffer.as_slice(), &[.., 'n', a] if a != 'y') {
-            let i = me.buffer.len() - 2;
-            me.buffer[i] = 'ん';
-
-            me.record_input_history(input);
+        if matches!(self.buffer.as_slice(), &[.., 'n', a] if a != 'y') {
+            let i = self.buffer.len() - 2;
+            self.buffer[i] = 'ん';
         }
     }
 }
@@ -160,226 +120,203 @@ macro_rules! if_bind {
 use if_bind;
 
 macro_rules! roma_pairs {
-    ($(($roma: literal, $hira: literal)),*$(,)?) => {
-        [$((as_char_array!($roma).as_slice(), as_char_array!($hira).as_slice())),*]
+    ($(($hira: literal, [$($roma: literal),+$(,)?])),*$(,)?) => {
+        [$((as_char_array!($hira).as_slice(), [$(as_char_array!($roma).as_slice()),+].as_slice())),*]
     }
 }
 
-static ROMA_TABLE: Lazy<HashMap<&[char], &[char]>> = Lazy::new(|| {
-    roma_pairs![
-        (",", "、"),
-        (".", "。"),
-        ("-", "ー"),
-        ("a", "あ"),
-        ("i", "い"),
-        ("u", "う"),
-        ("e", "え"),
-        ("o", "お"),
-        ("ka", "か"),
-        ("ki", "き"),
-        ("ku", "く"),
-        ("ke", "け"),
-        ("ko", "こ"),
-        ("ga", "が"),
-        ("gi", "ぎ"),
-        ("gu", "ぐ"),
-        ("ge", "げ"),
-        ("go", "ご"),
-        ("sa", "さ"),
-        ("si", "し"),
-        ("su", "す"),
-        ("se", "せ"),
-        ("so", "そ"),
-        ("za", "ざ"),
-        ("zi", "じ"),
-        ("ji", "じ"),
-        ("zu", "ず"),
-        ("ze", "ぜ"),
-        ("zo", "ぞ"),
-        ("ta", "た"),
-        ("ti", "ち"),
-        ("chi", "ち"),
-        ("tu", "つ"),
-        ("tsu", "つ"),
-        ("te", "て"),
-        ("to", "と"),
-        ("da", "だ"),
-        ("di", "ぢ"),
-        ("du", "づ"),
-        ("de", "で"),
-        ("do", "ど"),
-        ("na", "な"),
-        ("ni", "に"),
-        ("nu", "ぬ"),
-        ("ne", "ね"),
-        ("no", "の"),
-        ("ha", "は"),
-        ("hi", "ひ"),
-        ("hu", "ふ"),
-        ("fu", "ふ"),
-        ("he", "へ"),
-        ("ho", "ほ"),
-        ("ba", "ば"),
-        ("bi", "び"),
-        ("bu", "ぶ"),
-        ("be", "べ"),
-        ("bo", "ぼ"),
-        ("pa", "ぱ"),
-        ("pi", "ぴ"),
-        ("pu", "ぷ"),
-        ("pe", "ぺ"),
-        ("po", "ぽ"),
-        ("ma", "ま"),
-        ("mi", "み"),
-        ("mu", "む"),
-        ("me", "め"),
-        ("mo", "も"),
-        ("ya", "や"),
-        ("yu", "ゆ"),
-        ("yo", "よ"),
-        ("ra", "ら"),
-        ("ri", "り"),
-        ("ru", "る"),
-        ("re", "れ"),
-        ("ro", "ろ"),
-        ("wa", "わ"),
-        ("wo", "を"),
-        ("nn", "ん"),
-        ("xa", "ぁ"),
-        ("la", "ぁ"),
-        ("xi", "ぃ"),
-        ("li", "ぃ"),
-        ("xu", "ぅ"),
-        ("lu", "ぅ"),
-        ("xe", "ぇ"),
-        ("le", "ぇ"),
-        ("xo", "ぉ"),
-        ("lo", "ぉ"),
-        ("xya", "ゃ"),
-        ("lya", "ゃ"),
-        ("xyu", "ゅ"),
-        ("lyu", "ゅ"),
-        ("xyo", "ょ"),
-        ("lyo", "ょ"),
-        ("ltu", "っ"),
-        ("xtu", "っ"),
-        ("kya", "きゃ"),
-        ("kyi", "きぃ"),
-        ("kyu", "きゅ"),
-        ("kye", "きぇ"),
-        ("kyo", "きょ"),
-        ("qa", "くぁ"),
-        ("qi", "くぃ"),
-        ("qwu", "くぅ"),
-        ("qe", "くぇ"),
-        ("qo", "くぉ"),
-        ("gya", "ぎゃ"),
-        ("gyi", "ぎぃ"),
-        ("gyu", "ぎゅ"),
-        ("gye", "ぎぇ"),
-        ("gyo", "ぎょ"),
-        ("gwa", "ぐぁ"),
-        ("gwi", "ぐぃ"),
-        ("gwu", "ぐぅ"),
-        ("gwe", "ぐぇ"),
-        ("gwo", "ぐぉ"),
-        ("sya", "しゃ"),
-        ("sha", "しゃ"),
-        ("syi", "しぃ"),
-        ("syu", "しゅ"),
-        ("shu", "しゅ"),
-        ("sye", "しぇ"),
-        ("she", "しぇ"),
-        ("syo", "しょ"),
-        ("sho", "しょ"),
-        ("swa", "すぁ"),
-        ("swi", "すぃ"),
-        ("swu", "すぅ"),
-        ("swe", "すぇ"),
-        ("swo", "すぉ"),
-        ("ja", "じゃ"),
-        ("zya", "じゃ"),
-        ("zyi", "じぃ"),
-        ("ju", "じゅ"),
-        ("zyu", "じゅ"),
-        ("je", "じぇ"),
-        ("zye", "じぇ"),
-        ("jo", "じょ"),
-        ("zyo", "じょ"),
-        ("tya", "ちゃ"),
-        ("cha", "ちゃ"),
-        ("tyi", "ちぃ"),
-        ("tyu", "ちゅ"),
-        ("chu", "ちゅ"),
-        ("tye", "ちぇ"),
-        ("che", "ちぇ"),
-        ("tyo", "ちょ"),
-        ("cho", "ちょ"),
-        ("tha", "てゃ"),
-        ("thi", "てぃ"),
-        ("thu", "てゅ"),
-        ("the", "てぇ"),
-        ("tho", "てょ"),
-        ("twa", "とぁ"),
-        ("twi", "とぃ"),
-        ("two", "とぅ"),
-        ("twe", "とぇ"),
-        ("two", "とぉ"),
-        ("dya", "ぢゃ"),
-        ("dyi", "ぢぃ"),
-        ("dyu", "ぢゅ"),
-        ("dye", "ぢぇ"),
-        ("dyo", "ぢょ"),
-        ("dha", "でゃ"),
-        ("dhi", "でぃ"),
-        ("dhu", "でゅ"),
-        ("dhe", "でぇ"),
-        ("dho", "でょ"),
-        ("dwa", "どぁ"),
-        ("dwi", "どぃ"),
-        ("dwu", "どぅ"),
-        ("dwe", "どぇ"),
-        ("dwo", "どぉ"),
-        ("nya", "にゃ"),
-        ("nyi", "にぃ"),
-        ("nyu", "にゅ"),
-        ("nye", "にぇ"),
-        ("nyo", "にょ"),
-        ("hya", "ひゃ"),
-        ("hyi", "ひぃ"),
-        ("hyu", "ひゅ"),
-        ("hye", "ひぇ"),
-        ("hyo", "ひょ"),
-        ("fa", "ふぁ"),
-        ("fi", "ふぃ"),
-        ("fwu", "ふぅ"),
-        ("fe", "ふぇ"),
-        ("fo", "ふぉ"),
-        ("bya", "びゃ"),
-        ("byi", "びぃ"),
-        ("byu", "びゅ"),
-        ("bye", "びぇ"),
-        ("byo", "びょ"),
-        ("pya", "ぴゃ"),
-        ("pyi", "ぴぃ"),
-        ("pyu", "ぴゅ"),
-        ("pye", "ぴぇ"),
-        ("pyo", "ぴょ"),
-        ("mya", "みゃ"),
-        ("myi", "みぃ"),
-        ("myu", "みゅ"),
-        ("mye", "みぇ"),
-        ("myo", "みょ"),
-        ("rya", "りゃ"),
-        ("ryi", "りぃ"),
-        ("ryu", "りゅ"),
-        ("rye", "りぇ"),
-        ("ryo", "りょ"),
-        ("wha", "うぁ"),
-        ("wi", "うぃ"),
-        ("we", "うぇ"),
-        ("who", "うぉ"),
-    ]
-    .into_iter()
-    .collect()
+static ROMA_TO_HIRA_TABLE: Lazy<HashMap<&[char], &[char]>> = Lazy::new(|| {
+    ROMA_PAIRS
+        .into_iter()
+        .flat_map(|(hira, romas)| romas.iter().map(move |&roma| (roma, hira)))
+        .collect()
 });
+
+static HIRA_TO_ROMA_TABLE: Lazy<HashMap<&[char], &[&[char]]>> =
+    Lazy::new(|| ROMA_PAIRS.into_iter().collect());
+
+const ROMA_PAIRS: [(&[char], &[&[char]]); 183] = roma_pairs![
+    (",", ["、"]),
+    (".", ["。"]),
+    ("-", ["ー"]),
+    ("あ", ["a"]),
+    ("い", ["i"]),
+    ("う", ["u"]),
+    ("え", ["e"]),
+    ("お", ["o"]),
+    ("か", ["ka"]),
+    ("き", ["ki"]),
+    ("く", ["ku"]),
+    ("け", ["ke"]),
+    ("こ", ["ko"]),
+    ("が", ["ga"]),
+    ("ぎ", ["gi"]),
+    ("ぐ", ["gu"]),
+    ("げ", ["ge"]),
+    ("ご", ["go"]),
+    ("さ", ["sa"]),
+    ("し", ["si"]),
+    ("す", ["su"]),
+    ("せ", ["se"]),
+    ("そ", ["so"]),
+    ("ざ", ["za"]),
+    ("じ", ["zi", "ji"]),
+    ("ず", ["zu"]),
+    ("ぜ", ["ze"]),
+    ("ぞ", ["zo"]),
+    ("た", ["ta"]),
+    ("ち", ["ti", "chi"]),
+    ("つ", ["tu", "tsu"]),
+    ("て", ["te"]),
+    ("と", ["to"]),
+    ("だ", ["da"]),
+    ("ぢ", ["di"]),
+    ("づ", ["du"]),
+    ("で", ["de"]),
+    ("ど", ["do"]),
+    ("な", ["na"]),
+    ("に", ["ni"]),
+    ("ぬ", ["nu"]),
+    ("ね", ["ne"]),
+    ("の", ["no"]),
+    ("は", ["ha"]),
+    ("ひ", ["hi"]),
+    ("ふ", ["hu", "fu"]),
+    ("へ", ["he"]),
+    ("ほ", ["ho"]),
+    ("ば", ["ba"]),
+    ("び", ["bi"]),
+    ("ぶ", ["bu"]),
+    ("べ", ["be"]),
+    ("ぼ", ["bo"]),
+    ("ぱ", ["pa"]),
+    ("ぴ", ["pi"]),
+    ("ぷ", ["pu"]),
+    ("ぺ", ["pe"]),
+    ("ぽ", ["po"]),
+    ("ま", ["ma"]),
+    ("み", ["mi"]),
+    ("む", ["mu"]),
+    ("め", ["me"]),
+    ("も", ["mo"]),
+    ("や", ["ya"]),
+    ("ゆ", ["yu"]),
+    ("よ", ["yo"]),
+    ("ら", ["ra"]),
+    ("り", ["ri"]),
+    ("る", ["ru"]),
+    ("れ", ["re"]),
+    ("ろ", ["ro"]),
+    ("わ", ["wa"]),
+    ("を", ["wo"]),
+    ("ん", ["nn"]),
+    ("ぁ", ["xa", "la"]),
+    ("ぃ", ["xi", "li"]),
+    ("ぅ", ["xu", "lu"]),
+    ("ぇ", ["xe", "le"]),
+    ("ぉ", ["xo", "lo"]),
+    ("きゃ", ["kya"]),
+    ("きぃ", ["kyi"]),
+    ("きゅ", ["kyu"]),
+    ("きぇ", ["kye"]),
+    ("きょ", ["kyo"]),
+    ("くぁ", ["qa"]),
+    ("くぃ", ["qi"]),
+    ("くぅ", ["qwu"]),
+    ("くぇ", ["qe"]),
+    ("くぉ", ["qo"]),
+    ("ぎゃ", ["gya"]),
+    ("ぎぃ", ["gyi"]),
+    ("ぎゅ", ["gyu"]),
+    ("ぎぇ", ["gye"]),
+    ("ぎょ", ["gyo"]),
+    ("ぐぁ", ["gwa"]),
+    ("ぐぃ", ["gwi"]),
+    ("ぐぅ", ["gwu"]),
+    ("ぐぇ", ["gwe"]),
+    ("ぐぉ", ["gwo"]),
+    ("しゃ", ["sya", "sha"]),
+    ("しぃ", ["syi"]),
+    ("しゅ", ["syu", "shu"]),
+    ("しぇ", ["sye", "she"]),
+    ("しょ", ["syo", "sho"]),
+    ("すぁ", ["swa"]),
+    ("すぃ", ["swi"]),
+    ("すぅ", ["swu"]),
+    ("すぇ", ["swe"]),
+    ("すぉ", ["swo"]),
+    ("じゃ", ["ja", "zya"]),
+    ("じぃ", ["zyi"]),
+    ("じゅ", ["ju", "zyu"]),
+    ("じぇ", ["je", "zye"]),
+    ("じょ", ["jo", "zyo"]),
+    ("ちゃ", ["tya", "cha"]),
+    ("ちぃ", ["tyi"]),
+    ("ちゅ", ["tyu", "chu"]),
+    ("ちぇ", ["tye", "che"]),
+    ("ちょ", ["tyo", "cho"]),
+    ("てゃ", ["tha"]),
+    ("てぃ", ["thi"]),
+    ("てゅ", ["thu"]),
+    ("てぇ", ["the"]),
+    ("てょ", ["tho"]),
+    ("とぁ", ["twa"]),
+    ("とぃ", ["twi"]),
+    ("とぅ", ["two"]),
+    ("とぇ", ["twe"]),
+    ("とぉ", ["two"]),
+    ("ぢゃ", ["dya"]),
+    ("ぢぃ", ["dyi"]),
+    ("ぢゅ", ["dyu"]),
+    ("ぢぇ", ["dye"]),
+    ("ぢょ", ["dyo"]),
+    ("でゃ", ["dha"]),
+    ("でぃ", ["dhi"]),
+    ("でゅ", ["dhu"]),
+    ("でぇ", ["dhe"]),
+    ("でょ", ["dho"]),
+    ("どぁ", ["dwa"]),
+    ("どぃ", ["dwi"]),
+    ("どぅ", ["dwu"]),
+    ("どぇ", ["dwe"]),
+    ("どぉ", ["dwo"]),
+    ("にゃ", ["nya"]),
+    ("にぃ", ["nyi"]),
+    ("にゅ", ["nyu"]),
+    ("にぇ", ["nye"]),
+    ("にょ", ["nyo"]),
+    ("ひゃ", ["hya"]),
+    ("ひぃ", ["hyi"]),
+    ("ひゅ", ["hyu"]),
+    ("ひぇ", ["hye"]),
+    ("ひょ", ["hyo"]),
+    ("ふぁ", ["fa"]),
+    ("ふぃ", ["fi"]),
+    ("ふぅ", ["fwu"]),
+    ("ふぇ", ["fe"]),
+    ("ふぉ", ["fo"]),
+    ("びゃ", ["bya"]),
+    ("びぃ", ["byi"]),
+    ("びゅ", ["byu"]),
+    ("びぇ", ["bye"]),
+    ("びょ", ["byo"]),
+    ("ぴゃ", ["pya"]),
+    ("ぴぃ", ["pyi"]),
+    ("ぴゅ", ["pyu"]),
+    ("ぴぇ", ["pye"]),
+    ("ぴょ", ["pyo"]),
+    ("みゃ", ["mya"]),
+    ("みぃ", ["myi"]),
+    ("みゅ", ["myu"]),
+    ("みぇ", ["mye"]),
+    ("みょ", ["myo"]),
+    ("りゃ", ["rya"]),
+    ("りぃ", ["ryi"]),
+    ("りゅ", ["ryu"]),
+    ("りぇ", ["rye"]),
+    ("りょ", ["ryo"]),
+    ("うぁ", ["wha"]),
+    ("うぃ", ["wi"]),
+    ("うぇ", ["we"]),
+    ("うぉ", ["who"]),
+];

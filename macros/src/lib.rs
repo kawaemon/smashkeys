@@ -72,8 +72,22 @@ pub fn segments(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             let segments = self
                 .origin
                 .into_iter()
-                .map(|t| str_to_char_array(&t))
-                .zip(self.hira.into_iter().map(|t| str_to_char_array(&t)))
+                .zip(self.hira.into_iter())
+                .flat_map(|(a, b)| {
+                    if a.chars().count() == b.chars().count() {
+                        a.chars()
+                            .zip(b.chars())
+                            .map(|(a, b)| {
+                                (
+                                    format!(r#"['{a}']"#).parse().unwrap(),
+                                    format!(r#"['{b}']"#).parse().unwrap(),
+                                )
+                            })
+                            .collect()
+                    } else {
+                        vec![(str_to_char_array(&a), str_to_char_array(&b))]
+                    }
+                })
                 .map(
                     |(origin, hira)| quote! { Segment::new(#origin.as_slice(), #hira.as_slice()) },
                 );
