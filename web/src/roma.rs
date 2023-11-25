@@ -167,6 +167,7 @@ macro_rules! roma_pairs {
 
 static ROMA_TABLE: Lazy<HashMap<&[char], &[char]>> = Lazy::new(|| {
     roma_pairs![
+        ("-", "ー"),
         (",", "、"),
         (".", "。"),
         ("a", "あ"),

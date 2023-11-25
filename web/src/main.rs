@@ -25,10 +25,10 @@ const SENTENCES: &[&[Segment]] = &[
     ],
 ];
 
-pub struct App<'a, S: 'a> {
+pub struct App<'a> {
     ime: Ime,
-    sentences: S,
-    sentence: Sentence<'a>,
+    sentences: Vec<Sentence<'a>>,
+    index: usize,
 }
 
 pub struct Sentence<'a> {
@@ -102,15 +102,19 @@ impl SegmentTypingStatus {
     }
 }
 
-impl<'a, S> App<'a, S>
-where
-    S: 'a + Iterator<Item = Sentence<'a>>,
-{
+impl<'a> App<'a> {
+    fn sentence(&self) -> &Sentence<'a> {
+        &self.sentences[self.index]
+    }
+    fn sentence_mut(&mut self) -> &mut Sentence<'a> {
+        &mut self.sentences[self.index]
+    }
+
     fn typing_status(&self) -> Vec<SegmentTypingStatus> {
         let mut ret = vec![];
 
         let ime_buf = self.ime.buffer();
-        let segment = self.sentence.current_segment();
+        let segment = self.sentence().current_segment();
 
         for (i, &c) in ime_buf.iter().enumerate() {
             if c.is_ascii() {
@@ -140,19 +144,20 @@ where
     }
 }
 
-type DefaultApp = App<'static, Box<dyn Iterator<Item = Sentence<'static>>>>;
+type DefaultApp = App<'static>;
 
 impl Component for DefaultApp {
     type Message = AppMessage;
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
-        let mut iter = SENTENCES.iter().map(|x| Sentence::new(x));
-        let sentence = iter.next().unwrap();
         Self {
             ime: Ime::new(),
-            sentences: Box::new(iter),
-            sentence,
+            sentences: SENTENCES
+                .iter()
+                .map(|x| Sentence::new(x))
+                .collect::<Vec<_>>(),
+            index: 0,
         }
     }
 
@@ -170,13 +175,13 @@ impl Component for DefaultApp {
                     self.ime.put(c);
                 }
 
-                let segment = self.sentence.current_segment();
+                let segment = self.sentence().current_segment();
                 if self.ime.buffer().get(0..segment.hira.len()) == Some(segment.hira) {
                     let len = segment.hira.len();
                     self.ime.trim_beginning(len);
 
-                    if !self.sentence.advance_segment() {
-                        self.sentence = self.sentences.next().unwrap();
+                    if !self.sentence_mut().advance_segment() {
+                        self.index += 1;
                     }
                 }
             }
@@ -186,15 +191,56 @@ impl Component for DefaultApp {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let typed = self
-            .sentence
+        let typed_origin = self
+            .sentence()
             .typed_segments()
             .iter()
             .flat_map(|x| x.origin)
             .collect::<String>();
 
-        let typing_status = self.typing_status();
-        let typing = typing_status
+        let untyped_origin = self
+            .sentence()
+            .segments()
+            .iter()
+            .flat_map(|x| x.origin)
+            .skip(typed_origin.chars().count())
+            .collect::<String>();
+
+        let mut typed_hira = self
+            .sentence()
+            .typed_segments()
+            .iter()
+            .flat_map(|x| x.hira)
+            .collect::<String>();
+
+        let s = self
+            .typing_status()
+            .iter()
+            .map(|x| {
+                let color = if x.ok { "green" } else { "red" };
+                let style = format!("color: {color}; text-decoration: underline {color};");
+                html!(<span {style}>{x.c}</span>)
+            })
+            .collect::<Html>();
+        let s = html!(<><span style={"color:green"}>{&typed_hira}</span>{s}</>);
+
+        let untyped_hira = self
+            .sentence()
+            .segments()
+            .iter()
+            .flat_map(|x| x.hira)
+            .skip(
+                typed_hira.chars().count()
+                    + self
+                        .typing_status()
+                        .iter()
+                        .take_while(|x| !x.c.is_ascii())
+                        .count(),
+            )
+            .collect::<String>();
+
+        let typing = self
+            .typing_status()
             .iter()
             .map(|x| {
                 let color = if x.ok { "green" } else { "red" };
@@ -203,13 +249,19 @@ impl Component for DefaultApp {
             })
             .collect::<Html>();
 
-        let untyped = self
-            .sentence
-            .segments()
-            .iter()
-            .flat_map(|x| x.origin)
-            .skip(typed.chars().count())
-            .collect::<String>();
+        let next = 'd: {
+            let Some(next) = self.sentences.get(self.index + 1) else {
+                break 'd html!();
+            };
+
+            let s = next
+                .segments()
+                .iter()
+                .flat_map(|x| x.origin)
+                .collect::<String>();
+
+            html!(<p style={"color:gray"}>{s}</p>)
+        };
 
         html! {
             <>
@@ -218,15 +270,20 @@ impl Component for DefaultApp {
                     value=""
                     onkeydown={ctx.link().callback(|e: KeyboardEvent| AppMessage::Type(e.key()))}
                 />
+                <p> {self.ime.input_history().collect::<String>()} {"　"} </p>
                 <p>
-                    <span style={"color:green"}>{&typed}</span>
-                    <span style={"color:gray"}>{untyped}</span>
+                    <span style={"color:green"}>{&typed_origin}</span>
+                    <span style={"color:gray"}>{&untyped_origin}</span>
+                    <br />
+                    <span style={"color:green"}>{&typed_origin}</span>
+                    {typing.clone()}
+                    {"　"}
+                    <br />
+
+                    <span style={"color:green"}>{s}</span>
+                    <span style={"color:gray"}>{&untyped_hira}</span>
                 </p>
-                <p>
-                    <span style={"color:green"}>{&typed}</span>
-                    {typing}
-                </p>
-                <p> {self.ime.input_history().collect::<String>()} </p>
+                {next}
             </>
         }
     }
