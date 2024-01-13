@@ -1,12 +1,29 @@
 <!DOCTYPE html>
 <html>
-    <head>
-        <meta charset="utf-8" />
-        <title>Yew App</title>
-        <style>
-            html {
-                font-family: sans;
-            }
-        </style>
-    </head>
+  <head>
+    <meta charset="utf-8" />
+    <title>Yew App</title>
+    <style>
+      * {
+        font-family: sans;
+        margin: 0;
+        padding: 0;
+      }
+      canvas {
+        border: solid red 1px;
+        width: 90vw;
+        height: 90vh;
+      }
+      .container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <canvas id="main"></canvas>
+    </div>
+  </body>
 </html>

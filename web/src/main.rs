@@ -5,9 +5,23 @@
 mod ext;
 mod roma;
 
+use std::{
+    cell::RefCell,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+};
+
+use gloo::{
+    render::{request_animation_frame, AnimationFrame},
+    utils::document,
+};
 use macros::segments;
 use roma::Ime;
-use yew::{events::KeyboardEvent, html, Component, Context, Html};
+use wasm_bindgen_futures::spawn_local;
+use web_sys::{wasm_bindgen::JsCast, CanvasRenderingContext2d, HtmlCanvasElement};
+// use yew::{events::KeyboardEvent, html, Component, Context, Html};
 
 #[rustfmt::skip]
 const SENTENCES: &[&[Segment]] = &[
@@ -144,152 +158,215 @@ impl<'a> App<'a> {
     }
 }
 
-type DefaultApp = App<'static>;
+// type DefaultApp = App<'static>;
+//
+// impl Component for DefaultApp {
+//     type Message = AppMessage;
+//     type Properties = ();
+//
+//     fn create(_ctx: &Context<Self>) -> Self {
+//         Self {
+//             ime: Ime::new(),
+//             sentences: SENTENCES
+//                 .iter()
+//                 .map(|x| Sentence::new(x))
+//                 .collect::<Vec<_>>(),
+//             index: 0,
+//         }
+//     }
+//
+//     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
+//         use AppMessage::*;
+//
+//         match msg {
+//             Type(b) if b == "Backspace" => {
+//                 self.ime.pop();
+//             }
+//
+//             Type(c) => {
+//                 let chars = c.chars().collect::<Vec<_>>();
+//                 if let &[c] = chars.as_slice() {
+//                     self.ime.put(c);
+//                 }
+//
+//                 let segment = self.sentence().current_segment();
+//                 if self.ime.buffer().get(0..segment.hira.len()) == Some(segment.hira) {
+//                     let len = segment.hira.len();
+//                     self.ime.trim_beginning(len);
+//
+//                     if !self.sentence_mut().advance_segment() {
+//                         self.index += 1;
+//                     }
+//                 }
+//             }
+//         };
+//
+//         true
+//     }
+//
+//     fn view(&self, ctx: &Context<Self>) -> Html {
+//         let typed_origin = self
+//             .sentence()
+//             .typed_segments()
+//             .iter()
+//             .flat_map(|x| x.origin)
+//             .collect::<String>();
+//
+//         let untyped_origin = self
+//             .sentence()
+//             .segments()
+//             .iter()
+//             .flat_map(|x| x.origin)
+//             .skip(typed_origin.chars().count())
+//             .collect::<String>();
+//
+//         let mut typed_hira = self
+//             .sentence()
+//             .typed_segments()
+//             .iter()
+//             .flat_map(|x| x.hira)
+//             .collect::<String>();
+//
+//         let s = self
+//             .typing_status()
+//             .iter()
+//             .map(|x| {
+//                 let color = if x.ok { "green" } else { "red" };
+//                 let style = format!("color: {color}; text-decoration: underline {color};");
+//                 html!(<span {style}>{x.c}</span>)
+//             })
+//             .collect::<Html>();
+//         let s = html!(<><span style={"color:green"}>{&typed_hira}</span>{s}</>);
+//
+//         let untyped_hira = self
+//             .sentence()
+//             .segments()
+//             .iter()
+//             .flat_map(|x| x.hira)
+//             .skip(
+//                 typed_hira.chars().count()
+//                     + self
+//                         .typing_status()
+//                         .iter()
+//                         .take_while(|x| !x.c.is_ascii())
+//                         .count(),
+//             )
+//             .collect::<String>();
+//
+//         let typing = self
+//             .typing_status()
+//             .iter()
+//             .map(|x| {
+//                 let color = if x.ok { "green" } else { "red" };
+//                 let style = format!("color: {color}; text-decoration: underline {color};");
+//                 html!(<span {style}>{x.c}</span>)
+//             })
+//             .collect::<Html>();
+//
+//         let next = 'd: {
+//             let Some(next) = self.sentences.get(self.index + 1) else {
+//                 break 'd html!();
+//             };
+//
+//             let s = next
+//                 .segments()
+//                 .iter()
+//                 .flat_map(|x| x.origin)
+//                 .collect::<String>();
+//
+//             html!(<p style={"color:gray"}>{s}</p>)
+//         };
+//
+//         html! {
+//             <>
+//                 <input
+//                     placeholder="type here"
+//                     value=""
+//                     onkeydown={ctx.link().callback(|e: KeyboardEvent| AppMessage::Type(e.key()))}
+//                 />
+//                 <p> {self.ime.input_history().collect::<String>()} {"　"} </p>
+//                 <p>
+//                     <span style={"color:green"}>{&typed_origin}</span>
+//                     <span style={"color:gray"}>{&untyped_origin}</span>
+//                     <br />
+//                     <span style={"color:green"}>{&typed_origin}</span>
+//                     {typing.clone()}
+//                     {"　"}
+//                     <br />
+//
+//                     <span style={"color:green"}>{s}</span>
+//                     <span style={"color:gray"}>{&untyped_hira}</span>
+//                 </p>
+//                 {next}
+//             </>
+//         }
+//     }
+// }
 
-impl Component for DefaultApp {
-    type Message = AppMessage;
-    type Properties = ();
+fn main() {
+    wasm_logger::init(wasm_logger::Config::default());
+    spawn_local(run());
+}
 
-    fn create(_ctx: &Context<Self>) -> Self {
+struct RequestAnimationFrameFuture {
+    raf_instance: Option<AnimationFrame>,
+    ready: Rc<RefCell<Option<()>>>,
+}
+
+impl RequestAnimationFrameFuture {
+    fn new() -> Self {
         Self {
-            ime: Ime::new(),
-            sentences: SENTENCES
-                .iter()
-                .map(|x| Sentence::new(x))
-                .collect::<Vec<_>>(),
-            index: 0,
-        }
-    }
-
-    fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
-        use AppMessage::*;
-
-        match msg {
-            Type(b) if b == "Backspace" => {
-                self.ime.pop();
-            }
-
-            Type(c) => {
-                let chars = c.chars().collect::<Vec<_>>();
-                if let &[c] = chars.as_slice() {
-                    self.ime.put(c);
-                }
-
-                let segment = self.sentence().current_segment();
-                if self.ime.buffer().get(0..segment.hira.len()) == Some(segment.hira) {
-                    let len = segment.hira.len();
-                    self.ime.trim_beginning(len);
-
-                    if !self.sentence_mut().advance_segment() {
-                        self.index += 1;
-                    }
-                }
-            }
-        };
-
-        true
-    }
-
-    fn view(&self, ctx: &Context<Self>) -> Html {
-        let typed_origin = self
-            .sentence()
-            .typed_segments()
-            .iter()
-            .flat_map(|x| x.origin)
-            .collect::<String>();
-
-        let untyped_origin = self
-            .sentence()
-            .segments()
-            .iter()
-            .flat_map(|x| x.origin)
-            .skip(typed_origin.chars().count())
-            .collect::<String>();
-
-        let mut typed_hira = self
-            .sentence()
-            .typed_segments()
-            .iter()
-            .flat_map(|x| x.hira)
-            .collect::<String>();
-
-        let s = self
-            .typing_status()
-            .iter()
-            .map(|x| {
-                let color = if x.ok { "green" } else { "red" };
-                let style = format!("color: {color}; text-decoration: underline {color};");
-                html!(<span {style}>{x.c}</span>)
-            })
-            .collect::<Html>();
-        let s = html!(<><span style={"color:green"}>{&typed_hira}</span>{s}</>);
-
-        let untyped_hira = self
-            .sentence()
-            .segments()
-            .iter()
-            .flat_map(|x| x.hira)
-            .skip(
-                typed_hira.chars().count()
-                    + self
-                        .typing_status()
-                        .iter()
-                        .take_while(|x| !x.c.is_ascii())
-                        .count(),
-            )
-            .collect::<String>();
-
-        let typing = self
-            .typing_status()
-            .iter()
-            .map(|x| {
-                let color = if x.ok { "green" } else { "red" };
-                let style = format!("color: {color}; text-decoration: underline {color};");
-                html!(<span {style}>{x.c}</span>)
-            })
-            .collect::<Html>();
-
-        let next = 'd: {
-            let Some(next) = self.sentences.get(self.index + 1) else {
-                break 'd html!();
-            };
-
-            let s = next
-                .segments()
-                .iter()
-                .flat_map(|x| x.origin)
-                .collect::<String>();
-
-            html!(<p style={"color:gray"}>{s}</p>)
-        };
-
-        html! {
-            <>
-                <input
-                    placeholder="type here"
-                    value=""
-                    onkeydown={ctx.link().callback(|e: KeyboardEvent| AppMessage::Type(e.key()))}
-                />
-                <p> {self.ime.input_history().collect::<String>()} {"　"} </p>
-                <p>
-                    <span style={"color:green"}>{&typed_origin}</span>
-                    <span style={"color:gray"}>{&untyped_origin}</span>
-                    <br />
-                    <span style={"color:green"}>{&typed_origin}</span>
-                    {typing.clone()}
-                    {"　"}
-                    <br />
-
-                    <span style={"color:green"}>{s}</span>
-                    <span style={"color:gray"}>{&untyped_hira}</span>
-                </p>
-                {next}
-            </>
+            raf_instance: None,
+            ready: Rc::new(RefCell::new(None)),
         }
     }
 }
 
-fn main() {
-    wasm_logger::init(wasm_logger::Config::default());
-    yew::Renderer::<DefaultApp>::new().render();
+impl Future for RequestAnimationFrameFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match this.ready.take() {
+            Some(_) => Poll::Ready(()),
+            None => {
+                let ready = Rc::clone(&this.ready);
+                let waker = cx.waker().to_owned();
+                let instance = request_animation_frame(move |_delta| {
+                    *ready.borrow_mut() = Some(());
+                    waker.wake();
+                });
+                this.raf_instance = Some(instance);
+                Poll::Pending
+            }
+        }
+    }
+}
+
+async fn run() {
+    let canvas = document().get_element_by_id("main").unwrap();
+    let canvas: HtmlCanvasElement = canvas.dyn_into().unwrap();
+
+    canvas.set_width(canvas.client_width() as u32);
+    canvas.set_height(canvas.client_height() as u32);
+
+    let ctx = canvas.get_context("2d").unwrap().unwrap();
+    let ctx: CanvasRenderingContext2d = ctx.dyn_into().unwrap();
+
+    for i in 0.. {
+        let width = canvas.width() as f64;
+        let height = canvas.height() as f64;
+
+        let font_mul = 10;
+
+        ctx.set_font(&format!(
+            "{}px sans-serif",
+            (font_mul as f64 / 100.0 * height)
+        ));
+
+        ctx.clear_rect(0.0, 0.0, width, height);
+        ctx.fill_text(&format!("{i}"), 100.0, 100.0).unwrap();
+
+        RequestAnimationFrameFuture::new().await;
+    }
 }
